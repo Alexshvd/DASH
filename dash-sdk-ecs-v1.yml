@@ -1,0 +1,293 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: DashSDK - Infrastructure as Cdoe Scan - Automation script to deploy AWS Infrastructure with ECS Fargate backend & API+Lambda Integration 
+
+Parameters:
+  VPC:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0b682cafe40535399
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0c8795e957974c265
+  Image:
+    Type: String
+    Default: public.ecr.aws/h5a1r9f8/dash-kics:latest
+  TaskName:
+    Type: String
+    Default: dashsdk-iac-scan
+  ContainerName:
+    Type: String
+    Default: dashsdk-kics
+  ContainerPort:
+    Type: Number
+    Default: 5000
+  S3Bucket:
+    Type: String
+    Description: S3 Bucket for hosting output results
+    Default: dashscan
+  S3Path:
+    Type: String
+    Description: Path where results are to be stored in S3 bucket
+    Default: scan-results/
+  ApiStageName:
+    Type: String
+    Default: default
+
+Resources:
+  
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join ['-', [!Ref TaskName, !Ref AWS::StackName, cluster]]
+  
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    # Makes sure the log group is created before it is used.
+    DependsOn: LogGroup
+    Properties:
+      # Name of the task definition. Subsequent versions of the task definition are grouped together under this name.
+      Family: !Join ['-', [!Ref TaskName, td]]
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 512
+      Memory: 2GB
+      # A role needed by ECS.
+      # "The ARN of the task execution role that containers in this task can assume. All containers in this task are granted the permissions that are specified in this role."
+      # "There is an optional task execution IAM role that you can specify with Fargate to allow your Fargate tasks to make API calls to Amazon ECR."
+      ExecutionRoleArn: !Ref ExecutionRole
+      # "The Amazon Resource Name (ARN) of an AWS Identity and Access Management (IAM) role that grants containers in the task permission to call AWS APIs on your behalf."
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: !Ref ContainerName
+          Image: !Ref Image
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          # Send logs to CloudWatch Logs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: GITHUB_API_TOKEN
+              Value: ghp_xxx
+            - Name: GITHUB_REPO
+              Value: RipeSeed/dashsdk-iac-demo
+            - Name: GITHUB_USER_NAME
+              Value: RipeSeed
+            - Name: OUTPUT_FILE_NAME
+              Value: iac_ecs_scan
+            - Name: OUTPUT_PATH
+              Value: RipeSeed/dashsdk-iac-demo
+            - Name: S3_PATH
+              Value: s3://dashscan/scan-results/test-results
+
+  # A role needed by ECS
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [!Ref TaskName, !Ref AWS::StackName, exec-role]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+  
+  # A role for the containers
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [!Ref TaskName, !Ref AWS::StackName, task-role]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonECS_FullAccess'
+      Policies:
+        - PolicyName: !Join ['-', [!Ref TaskName, s3-access-policy]]
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: 
+                  - !Join ['', ['arn:aws:s3:::',!Ref S3Bucket]]
+                  - !Join ['', ['arn:aws:s3:::',!Ref S3Bucket, /*]]
+  # A role for the containers
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', [!Ref TaskName, !Ref AWS::StackName, lambda-role]]
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AmazonECS_FullAccess'
+
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['-', [!Ref TaskName, !Ref AWS::StackName, container-sg]]
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          CidrIp: 0.0.0.0/0
+  SecurityGroupIngress:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref ContainerSecurityGroup
+      IpProtocol: '-1'
+      FromPort: '-1'
+      ToPort: '-1'
+      SourceSecurityGroupId: !Ref ContainerSecurityGroup
+    DependsOn:
+      - ContainerSecurityGroup
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['-', [/ecs/, !Ref TaskName, !Ref AWS::StackName, log-group]]
+
+  LambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    DependsOn:
+      - LambdaRole
+      - HttpApi
+    Properties:
+      Handler: lambdas/invokeFargate.handler
+      FunctionName: !Join ['-', [!Ref AWS::StackName, invoke-fargate]]
+      Role: !GetAtt 
+        - LambdaRole
+        - Arn
+      Runtime: "nodejs14.x"
+      MemorySize: 1024
+      Timeout: 300
+      Environment:
+        Variables:
+          S3Bucket: !Ref S3Bucket
+          S3Path: !Ref S3Path
+          SubnetId: !Ref SubnetId
+          FargateClusterName: !Ref Cluster
+          TaskDefinitionName: !Sub ${TaskName}-td
+          ContainerName: !Ref ContainerName
+
+  LambdaPermission:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/POST/scan'
+
+  HttpApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Join ['-', [!Ref AWS::StackName, ecs-api]]
+      Description: Lambda proxy for triggering Lambda function using API ApiGateway
+
+  ScanResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      RestApiId: !Ref HttpApi
+      ParentId: !GetAtt 
+        - HttpApi
+        - RootResourceId
+      PathPart: scan
+
+  HttpApiStage:
+    Type: 'AWS::ApiGateway::Stage'
+    Properties:
+      DeploymentId: !Ref HttpApiDeployment
+      MethodSettings:
+        - DataTraceEnabled: false
+          HttpMethod: '*'
+          LoggingLevel: 'OFF'
+          ResourcePath: /*
+      RestApiId: !Ref HttpApi
+      StageName: !Ref ApiStageName
+
+  PostScanMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS
+        Uri: !Sub 
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !GetAtt LambdaFunction.Arn
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseTemplates:
+              application/json: $input.json('$')
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: >-
+                'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'
+              method.response.header.Access-Control-Allow-Methods: '''GET,POST,PUT,DELETE,OPTIONS'''
+              method.response.header.Access-Control-Allow-Origin: '''*'''
+      ResourceId: !Ref ScanResource
+      RestApiId: !Ref HttpApi
+      MethodResponses:
+        - ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+          StatusCode: '200'
+  OptionsScanMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      Integration:
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: >-
+                'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'
+              method.response.header.Access-Control-Allow-Methods: '''GET,OPTIONS'''
+              method.response.header.Access-Control-Allow-Origin: '''*'''
+            ResponseTemplates:
+              application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        Type: MOCK
+      ResourceId: !Ref ScanResource
+      RestApiId: !Ref HttpApi
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+  HttpApiDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    DependsOn:
+      - PostScanMethod
+      - OptionsScanMethod
+      - ScanResource
+    Properties:
+      RestApiId: !Ref HttpApi
+
+
+Outputs:
+  ApiEndpoint:
+    Description: API Endpoint to be consumed by Github Action workflow
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/scan
