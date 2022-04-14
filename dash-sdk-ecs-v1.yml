@@ -288,6 +288,7 @@ Resources:
 
 
 Outputs:
-  ApiEndpoint:
+  ApiEndpoint: 
     Description: API Endpoint to be consumed by Github Action workflow
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${ApiStageName}/scan
+#fewfw
