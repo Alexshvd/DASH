@@ -1,0 +1,15 @@
+image: atlassian/default-image:3
+
+pipelines:
+  default:
+    # The following deployment steps will be executed for each pipeline run.
+    - step:
+        name: 'Lambda Invocation'
+        deployment: staging
+        script:
+          - echo "BITBUCKET_COMMIT"
+          - COMMIT_MESSAGE=`git log --format=%B -n 1 $BITBUCKET_COMMIT`
+          - SHA="123"
+          - HOST="bitbucket.org"
+          - RESULT=`curl -d "{\"Repository\":\"$BITBUCKET_REPO_FULL_NAME\",\"Branch\":\"$BITBUCKET_BRANCH\",\"SHA\":\"$SHA\",\"Message\":\"$COMMIT_MESSAGE\",\"Token\":\"$Token\",\"OrganizationCode\":\"$OrganizationCode\",\"LicenceKey\":\"$LicenceKey\",\"AccessToken\":\"$AccessToken\",\"DashUrl\":\"$DashUrl\",\"Host\":\"$HOST\"}" -H "Content-Type:application/json" -X POST https://lo180u9kk8.execute-api.us-east-1.amazonaws.com/default/scan | jq '.statusCode'`
+          - if [[ $((echo $RESULT) | jq '.statusCode') = 200 ]] ; then echo "Lambda invoked successfully."; else echo $RESULT | jq '.body'; exit -1; fi

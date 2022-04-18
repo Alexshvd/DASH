@@ -1,0 +1,15 @@
+{
+  "name": "iac-kics-scanning",
+  "version": "1.0.0",
+  "scripts": {
+    "setenv": "export AWS_PROFILE=taimur && export AWS_REGION=us-east-1",
+    "package": "aws cloudformation package --profile taimur --template cloudformation/dash-sdk-ecs-v1.yml --s3-bucket=dashsdk-iac-scanning --output-template-file output/template.yml",
+    "deploy": "aws cloudformation deploy --profile taimur --template-file output/template.yml --stack-name dashsdk-iac-scan-stack2 --capabilities CAPABILITY_NAMED_IAM --tags project=dashsdk",
+    "delete": "yarn setenv && aws cloudformation delete-stack --stack-name dashsdk-iac-scan-stack2",
+    "push": "yarn setenv && yarn package && yarn deploy"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "aws-cli": "^0.0.2"
+  }
+}
