@@ -10,6 +10,6 @@
   },
   "dependencies": {},
   "devDependencies": {
-    "aws-cli": "^0.0.2"
+    "aws-cli": "^0.0.2" //jkhjkh
   }
 }
