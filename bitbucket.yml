@@ -2,7 +2,7 @@ image: atlassian/default-image:3
 
 pipelines:
   default:
-    # The following deployment steps will be executed for each pipeline run.
+    # The following deployment steps will be executed for each pipeline run...
     - step:
         name: 'Lambda Invocation'
         deployment: staging
